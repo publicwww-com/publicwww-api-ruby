@@ -41,6 +41,44 @@ The query is the usual [PublicWWW syntax](https://publicwww.com/docs/query-synta
 `"exact phrase"`, several words for all of them, `-word` to exclude, `site:de`,
 `depth:all` for inner pages.
 
+## Clusters
+
+A cluster is a saved list of sites - the results of a search or your own list - to
+pull values out of their page source or to combine with other clusters. See
+[clusters in the API](https://publicwww.com/docs/api/clusters/).
+
+```sh
+bin/publicwww cluster-create --query '"googletagmanager.com/gtm.js"'   # prints id, size, created, name
+bin/publicwww extract 12 --presets email,phone > contacts.csv          # the whole cluster, part after part
+bin/publicwww extract 12 --regex '/data-site-id="([0-9]+)"/i' > ids.csv
+bin/publicwww cluster-combine diff 14 12 --name "new this month"       # also: and, or
+bin/publicwww clusters      # and: cluster ID, presets, cluster-rename ID NAME, cluster-delete ID
+```
+
+```ruby
+gtm = pw.create_cluster(query: '"googletagmanager.com/gtm.js"')      # costs one search
+mine = pw.create_cluster(domains: ["example.com", "https://example.org/"], name: "mine")
+
+# Every site, in parts of up to 1000 (following next_offset); spends extraction points.
+pw.each_extract_row(gtm["id"], presets: %w[email phone]) do |row|
+  emails, phones = row["values"]                     # one array per expression
+  puts [row["domain"], emails.join(" "), phones.join(" ")].join("\t")
+end
+
+hotjar = pw.create_cluster(query: '"static.hotjar.com"')
+both = pw.combine_clusters("and", [gtm["id"], hotjar["id"]])   # "or"; "diff" - the first without the second
+pw.each_cluster_domain(both["id"]) { |domain| puts domain }
+pw.delete_cluster(hotjar["id"])
+```
+
+`cluster_presets` lists the ready-made expressions: email, phone, whatsapp,
+telegram, skype, facebook, instagram, twitter, linkedin, gtm, ga4, ua, hotjar,
+adsense, bitcoin. Your own `regex:` is a PCRE in slashes; the first group is the
+value. `extract` is one part, `next_offset` says where the next one starts. An
+account keeps up to 100 clusters (`409 cluster_limit` past that). If the day's
+extraction points run out midway, `each_extract_row` raises `extract_quota_exceeded`
+with the offset to resume from (`extract ... --offset N`).
+
 ## Errors
 
 Any refusal raises `PublicWWW::Error` with `.status` and `.code`, except one: `429 too_many_requests` (more than ten

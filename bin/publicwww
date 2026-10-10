@@ -4,17 +4,52 @@
 #   bin/publicwww account
 #   bin/publicwww search '"angular.min.js"' [per_page]
 #   bin/publicwww export '"angular.min.js"' > sites.txt
+#   bin/publicwww cluster-create --query '"googletagmanager.com/gtm.js"'
+#   bin/publicwww extract 12 --presets email,phone > contacts.csv
 
 require_relative "../lib/publicwww"
 
-cmd, query, per_page = ARGV
-unless cmd == "account" || (%w[search export].include?(cmd) && query)
-  warn "usage: publicwww account | search QUERY [PER_PAGE] | export QUERY"
+USAGE = <<~TEXT
+  usage: publicwww account | search QUERY [PER_PAGE] | export QUERY
+         | clusters | cluster ID | cluster-create (--query Q | --domains-file F) [--name N]
+         | cluster-combine and|or|diff ID ID... [--name N] | presets
+         | extract ID [--presets a,b] [--regex R]... [--offset N] | cluster-rename ID NAME | cluster-delete ID
+TEXT
+
+# Positional arguments and --options; --regex may repeat.
+cmd, *rest = ARGV
+pos = []
+opt = { "regex" => [] }
+while (a = rest.shift)
+  if (m = a.match(/\A--([a-z-]+)\z/))
+    v = rest.shift.to_s
+    if m[1] == "regex" then opt["regex"] << v
+    else opt[m[1]] = v
+    end
+  else
+    pos << a
+  end
+end
+
+need = { "account" => 0, "search" => 1, "export" => 1, "clusters" => 0, "cluster" => 1, "cluster-create" => 0,
+         "cluster-combine" => 3, "presets" => 0, "extract" => 1, "cluster-rename" => 2, "cluster-delete" => 1 }
+if !need.key?(cmd) || pos.size < need[cmd] ||
+   (cmd == "cluster-create" && !opt["query"] && !opt["domains-file"])
+  warn USAGE
   exit 2
+end
+
+def cluster_line(c)
+  puts [c["id"], c["size"], c["created"], c["name"]].join("\t")
+end
+
+def csv_cell(s)
+  s =~ /[",\r\n]/ ? "\"#{s.gsub('"', '""')}\"" : s
 end
 
 begin
   pw = PublicWWW::Client.new
+  query, per_page = pos
   case cmd
   when "account"
     puts JSON.pretty_generate(pw.account)
@@ -26,8 +61,41 @@ begin
   when "export"
     meta = pw.each_result(query) { |r| puts r["url"] }
     warn "note: the plan returned #{meta['returned']} of #{meta['total']}" if meta && meta["truncated"]
+  when "clusters"
+    res = pw.clusters
+    puts "#{res['count']} clusters of at most #{res['max']}"
+    res["clusters"].each { |c| cluster_line(c) }
+  when "cluster"
+    pw.each_cluster_domain(pos[0]) { |d| puts d }
+  when "cluster-create"
+    if opt["query"]
+      cluster_line(pw.create_cluster(query: opt["query"], name: opt["name"]))
+    else
+      f = opt["domains-file"]
+      domains = (f == "-" ? $stdin.read : File.read(f)).split("\n").map(&:strip).reject(&:empty?)
+      cluster_line(pw.create_cluster(domains: domains, name: opt["name"]))
+    end
+  when "cluster-combine"
+    cluster_line(pw.combine_clusters(pos[0], pos[1..], name: opt["name"]))
+  when "presets"
+    pw.cluster_presets["presets"].each { |p| puts "#{p['name']}\t#{p['about']}" }
+  when "extract"
+    presets = opt.fetch("presets", "").split(",").map(&:strip).reject(&:empty?)
+    offset = Integer(opt.fetch("offset", "0"))
+    puts((["domain"] + presets + opt["regex"]).map { |s| csv_cell(s) }.join(",")) if offset.zero?
+    n = 0
+    last = pw.each_extract_row(pos[0], presets: presets, regex: opt["regex"], offset: offset) do |r|
+      puts(([r["domain"]] + r["values"].map { |v| v.join("\n") }).map { |s| csv_cell(s) }.join(","))
+      n += 1
+    end
+    warn "#{n} sites with matches, #{last['points_left']} extraction points left"
+  when "cluster-rename"
+    cluster_line(pw.rename_cluster(pos[0], pos[1]))
+  when "cluster-delete"
+    res = pw.delete_cluster(pos[0])
+    puts "deleted #{res['deleted']}\t#{res['name']}"
   end
-rescue PublicWWW::Error => e
+rescue PublicWWW::Error, ArgumentError, SystemCallError => e
   warn e.message
   exit 1
 end
