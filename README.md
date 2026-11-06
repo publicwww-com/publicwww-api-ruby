@@ -49,7 +49,10 @@ pull values out of their page source or to combine with other clusters. See
 
 ```sh
 bin/publicwww cluster-create --query '"googletagmanager.com/gtm.js"'   # prints id, size, created, name
+bin/publicwww cluster-create --query 'like:"online course" site:de' --limit 100   # sites about a topic; like: removes nothing, so pass --limit
 bin/publicwww extract 12 --presets email,phone > contacts.csv          # the whole cluster, part after part
+bin/publicwww extract 12 --presets email --delimiter ';' > emails.csv
+bin/publicwww signatures 12    # code the sites share, as searches for more like them
 bin/publicwww extract 12 --regex '/data-site-id="([0-9]+)"/i' > ids.csv
 bin/publicwww cluster-combine diff 14 12 --name "new this month"       # also: and, or
 bin/publicwww clusters      # and: cluster ID, presets, cluster-rename ID NAME, cluster-delete ID
@@ -58,6 +61,7 @@ bin/publicwww clusters      # and: cluster ID, presets, cluster-rename ID NAME, 
 ```ruby
 gtm = pw.create_cluster(query: '"googletagmanager.com/gtm.js"')      # costs one search
 mine = pw.create_cluster(domains: ["example.com", "https://example.org/"], name: "mine")
+topic = pw.create_cluster(query: 'like:"online course" site:de', limit: 100)   # the first 100 by similarity
 
 # Every site, in parts of up to 1000 (following next_offset); spends extraction points.
 pw.each_extract_row(gtm["id"], presets: %w[email phone]) do |row|

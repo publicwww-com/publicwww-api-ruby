@@ -14,7 +14,7 @@ require "net/http"
 require "uri"
 
 module PublicWWW
-  USER_AGENT = "publicwww-api-ruby/1.1"
+  USER_AGENT = "publicwww-api-ruby/1.2"
 
   # An error answer from the API.
   class Error < StandardError
@@ -97,10 +97,13 @@ module PublicWWW
 
     # A new cluster from a search (query:, costs one search like #search) or
     # from a list of domains or urls (domains:; only sites in the index are
-    # kept). 409 cluster_limit when the account has 100.
-    def create_cluster(query: nil, domains: nil, name: nil)
+    # kept). limit: takes only the first N results of the search, in its own
+    # order: pass it with like:, or the cluster takes the plan's maximum. 409
+    # cluster_limit when the account has 100.
+    def create_cluster(query: nil, domains: nil, name: nil, limit: nil)
       body = query ? { query: query } : { domains: Array(domains) }
       body[:name] = name if name
+      body[:limit] = limit if limit && query
       json("/v1/clusters", body: body)
     end
 
@@ -127,6 +130,21 @@ module PublicWWW
            body: { presets: presets, regex: regex, offset: offset, limit: limit, skip_empty: skip_empty })
     end
 
+    # One part of an extraction as CSV: "csv" (the text), "next_offset" (nil
+    # when the cluster is done), "points_left". The delimiter is a comma by
+    # default; header: true adds a first line with the column names. Costs
+    # extraction points.
+    def extract_csv(id, presets: [], regex: [], offset: 0, limit: 1000, skip_empty: true, delimiter: nil, header: false)
+      body = { presets: presets, regex: regex, offset: offset, limit: limit, skip_empty: skip_empty,
+               format: "csv", header: header }
+      body[:delimiter] = delimiter if delimiter
+      get("/v1/clusters/#{Integer(id)}/extract", {}, body) do |res|
+        following = res["X-Next-Offset"].to_s
+        { "csv" => res.body, "next_offset" => following.empty? ? nil : following.to_i,
+          "points_left" => res["X-Points-Left"].to_i }
+      end
+    end
+
     # Every row of an extraction over the whole cluster from offset on, part
     # after part (following next_offset). Returns the last part without its rows (regex,
     # points_left, ...). If the day's extraction points run out midway, raises
@@ -142,6 +160,13 @@ module PublicWWW
         offset = part["next_offset"]
         return part if offset.nil?
       end
+    end
+
+    # Code the cluster's websites share, as ready searches for more like them:
+    # signatures (query, in_cluster, websites, websites_max, technology),
+    # domains_used, websites_with_code. Spends nothing.
+    def signatures(id)
+      json("/v1/clusters/#{Integer(id)}/signatures")
     end
 
     def rename_cluster(id, name)
